@@ -108,6 +108,17 @@ export class FlexBox implements LayoutNode {
   }
 
   getBounds(currentPage?: PDFKit.PDFPage) {
+    // FlexBox parent overrides positioning regardless of measure mode
+    if (this.parentBox && isFlexBox(this.parentBox)) {
+      const layout = this.parentBox.computeChildLayout(this);
+      return {
+        x: layout.x + this.margin,
+        y: layout.y + this.margin,
+        width: layout.width - this.margin * 2,
+        height: layout.height - this.margin * 2,
+      };
+    }
+
     if (this.measure === "absolute") {
       return {
         x: this.x + this.margin,
@@ -119,17 +130,6 @@ export class FlexBox implements LayoutNode {
 
     if (!this.parentBox) {
       throw new Error("Cannot be proportional without parent");
-    }
-
-    // Check if parent is a FlexBox
-    if (isFlexBox(this.parentBox)) {
-      const layout = this.parentBox.computeChildLayout(this);
-      return {
-        x: layout.x + this.margin,
-        y: layout.y + this.margin,
-        width: layout.width - this.margin * 2,
-        height: layout.height - this.margin * 2,
-      };
     }
 
     const baseSize = this.parentBox.getBounds(currentPage);
