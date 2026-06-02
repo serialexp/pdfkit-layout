@@ -31,15 +31,15 @@
   },
   "homepage": "https://github.com/Aeolun/pdfkit-layout#readme",
   "dependencies": {
-    "typescript": "^5.5.3"
+    "typescript": "^5.9.3"
   },
   "devDependencies": {
-    "@biomejs/biome": "^1.8.3",
-    "@types/pdfkit": "^0.13.4",
-    "@vitest/ui": "^4.0.15",
-    "just-release": "^0.6.0",
-    "pdfkit": "^0.15.0",
-    "vitest": "^4.0.15"
+    "@biomejs/biome": "^2.4.2",
+    "@types/pdfkit": "^0.17.5",
+    "@vitest/ui": "^4.0.18",
+    "just-release": "^0.8.2",
+    "pdfkit": "^0.17.2",
+    "vitest": "^4.0.18"
   },
   "peerDependencies": {
     "pdfkit": "^0.15.0"
