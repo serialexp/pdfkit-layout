@@ -429,6 +429,9 @@ describe("draw", () => {
       stroke: vi.fn().mockReturnThis(),
       lineWidth: vi.fn().mockReturnThis(),
       rect: vi.fn().mockReturnThis(),
+      clip: vi.fn().mockReturnThis(),
+      save: vi.fn().mockReturnThis(),
+      restore: vi.fn().mockReturnThis(),
     } as unknown as PDFKit.PDFDocument;
 
     const box = new Box({
@@ -453,6 +456,9 @@ describe("draw", () => {
       stroke: vi.fn().mockReturnThis(),
       lineWidth: vi.fn().mockReturnThis(),
       rect: vi.fn().mockReturnThis(),
+      clip: vi.fn().mockReturnThis(),
+      save: vi.fn().mockReturnThis(),
+      restore: vi.fn().mockReturnThis(),
     } as unknown as PDFKit.PDFDocument;
 
     const box = new Box({
@@ -468,35 +474,77 @@ describe("draw", () => {
 
     expect(mockDoc.stroke).not.toHaveBeenCalled();
     expect(mockDoc.lineWidth).not.toHaveBeenCalled();
-    expect(mockDoc.rect).not.toHaveBeenCalled();
+    // rect is still called once to set up the clipping path, but no border stroke.
+    expect(mockDoc.rect).toHaveBeenCalledTimes(1);
+    expect(mockDoc.rect).toHaveBeenCalledWith(10, 20, 100, 200);
+    expect(mockDoc.clip).toHaveBeenCalledTimes(1);
   });
 
-  it("should render image boxes", () => {
+  it("should render image boxes (default fit: contain)", () => {
     const mockDoc = {
       image: vi.fn().mockReturnThis(),
       stroke: vi.fn().mockReturnThis(),
       lineWidth: vi.fn().mockReturnThis(),
       rect: vi.fn().mockReturnThis(),
+      clip: vi.fn().mockReturnThis(),
+      save: vi.fn().mockReturnThis(),
+      restore: vi.fn().mockReturnThis(),
     } as unknown as PDFKit.PDFDocument;
 
-    const image = new Image({
+    const image = new RealImage({
       x: 10,
       y: 20,
       width: 100,
       height: 200,
-      image: "/path/to/image.jpg",
+      src: "/path/to/image.jpg",
       borderWidth: 0,
       measure: "absolute",
     });
 
     draw(mockDoc, image);
 
+    // Default fit is "contain" → maps to pdfkit's `fit:` option.
+    // Default align is "center", verticalAlign defaults to "center" which the
+    // Image constructor normalises to "middle" → passed as pdfkit's `valign`.
     expect(mockDoc.image).toHaveBeenCalledWith("/path/to/image.jpg", 10, 20, {
       fit: [100, 200],
+      align: "center",
+      valign: "center",
     });
   });
 
-  it("should render text boxes", () => {
+  it("should pass cover instead of fit when Image fit='cover'", () => {
+    const mockDoc = {
+      image: vi.fn().mockReturnThis(),
+      stroke: vi.fn().mockReturnThis(),
+      lineWidth: vi.fn().mockReturnThis(),
+      rect: vi.fn().mockReturnThis(),
+      clip: vi.fn().mockReturnThis(),
+      save: vi.fn().mockReturnThis(),
+      restore: vi.fn().mockReturnThis(),
+    } as unknown as PDFKit.PDFDocument;
+
+    const image = new RealImage({
+      x: 0,
+      y: 0,
+      width: 50,
+      height: 80,
+      src: "/path/to/image.jpg",
+      fit: "cover",
+      borderWidth: 0,
+      measure: "absolute",
+    });
+
+    draw(mockDoc, image);
+
+    expect(mockDoc.image).toHaveBeenCalledWith("/path/to/image.jpg", 0, 0, {
+      cover: [50, 80],
+      align: "center",
+      valign: "center",
+    });
+  });
+
+  it("should render text boxes (top-aligned, padded)", () => {
     const mockDoc = {
       fontSize: vi.fn().mockReturnThis(),
       fillColor: vi.fn().mockReturnThis(),
@@ -504,9 +552,14 @@ describe("draw", () => {
       stroke: vi.fn().mockReturnThis(),
       lineWidth: vi.fn().mockReturnThis(),
       rect: vi.fn().mockReturnThis(),
+      clip: vi.fn().mockReturnThis(),
+      save: vi.fn().mockReturnThis(),
+      restore: vi.fn().mockReturnThis(),
+      heightOfString: vi.fn().mockReturnValue(20),
+      currentLineHeight: vi.fn().mockReturnValue(20),
     } as unknown as PDFKit.PDFDocument;
 
-    const text = new Text({
+    const text = new RealText({
       x: 10,
       y: 20,
       width: 100,
@@ -515,6 +568,8 @@ describe("draw", () => {
       fontSize: 16,
       color: "blue",
       padding: 5,
+      align: "left",
+      verticalAlign: "top",
       borderWidth: 0,
       measure: "absolute",
     });
@@ -523,14 +578,28 @@ describe("draw", () => {
 
     expect(mockDoc.fontSize).toHaveBeenCalledWith(16);
     expect(mockDoc.fillColor).toHaveBeenCalledWith("blue");
-    expect(mockDoc.text).toHaveBeenCalledWith("Hello World", 15, 25, {
-      width: 90,
-      height: 190,
-      align: "center",
-    });
+    // verticalAlign:"top" places the cap-top of the first line at
+    //   y = size.y + padding = 25
+    // pdfkit's text-y is the line-box top, which sits ABOVE the cap top by
+    // (ascender - capHeight). With no real font on this mock, we fall back to
+    // ascender = 800/1000 * fontSize = 12.8 and capHeight = ascender * 0.72
+    // = 9.216, so the offset is 12.8 - 9.216 = 3.584. Line-box top = 25 -
+    // 3.584 = 21.416. lineGap/paragraphGap are forced to 0.
+    expect(mockDoc.text).toHaveBeenCalledWith(
+      "Hello World",
+      15,
+      expect.closeTo(21.416, 3),
+      {
+        width: 90,
+        height: 190,
+        align: "left",
+        lineGap: 0,
+        paragraphGap: 0,
+      },
+    );
   });
 
-  it("should render text boxes with custom textAlign", () => {
+  it("should middle-align text vertically by default", () => {
     const mockDoc = {
       fontSize: vi.fn().mockReturnThis(),
       fillColor: vi.fn().mockReturnThis(),
@@ -538,26 +607,46 @@ describe("draw", () => {
       stroke: vi.fn().mockReturnThis(),
       lineWidth: vi.fn().mockReturnThis(),
       rect: vi.fn().mockReturnThis(),
+      clip: vi.fn().mockReturnThis(),
+      save: vi.fn().mockReturnThis(),
+      restore: vi.fn().mockReturnThis(),
+      heightOfString: vi.fn().mockReturnValue(20),
+      currentLineHeight: vi.fn().mockReturnValue(20),
     } as unknown as PDFKit.PDFDocument;
 
-    const text = new Text({
-      x: 10,
-      y: 20,
+    const text = new RealText({
+      x: 0,
+      y: 0,
       width: 100,
-      height: 200,
-      text: "Left aligned text",
-      textAlign: "left",
+      height: 100,
+      text: "Centered",
       borderWidth: 0,
       measure: "absolute",
     });
 
     draw(mockDoc, text);
 
-    expect(mockDoc.text).toHaveBeenCalledWith("Left aligned text", 10, 20, {
-      width: 100,
-      height: 200,
-      align: "left",
-    });
+    // Default verticalAlign: middle. With the mock doc there is no real font,
+    // so font-metric fallbacks apply: ascender = 800/1000 * 12 = 9.6,
+    // capHeight = ascender * 0.72 = 6.912.
+    // mock heightOfString = 20, mock currentLineHeight(true) = 20 → one line.
+    //   lineExtra = 20 - 6.912 = 13.088
+    //   visibleBlockHeight = max(6.912, 20 - 13.088) = 6.912
+    //   boxCentre = 50, visibleTop = 50 - 3.456 = 46.544
+    //   line_top = 46.544 - (9.6 - 6.912) = 43.856
+    // Default align is "left".
+    expect(mockDoc.text).toHaveBeenCalledWith(
+      "Centered",
+      0,
+      expect.closeTo(43.856, 3),
+      {
+        width: 100,
+        height: 100,
+        align: "left",
+        lineGap: 0,
+        paragraphGap: 0,
+      },
+    );
   });
 
   it("should recursively render children", () => {
@@ -565,6 +654,9 @@ describe("draw", () => {
       stroke: vi.fn().mockReturnThis(),
       lineWidth: vi.fn().mockReturnThis(),
       rect: vi.fn().mockReturnThis(),
+      clip: vi.fn().mockReturnThis(),
+      save: vi.fn().mockReturnThis(),
+      restore: vi.fn().mockReturnThis(),
     } as unknown as PDFKit.PDFDocument;
 
     const parent = new Box({
@@ -599,11 +691,75 @@ describe("draw", () => {
 
     draw(mockDoc, parent);
 
-    // Parent border + 2 child borders
-    expect(mockDoc.rect).toHaveBeenCalledTimes(3);
+    // Each node now produces a clip-rect AND (if borderWidth > 0) a border-rect.
+    // 3 nodes × 2 = 6 rect calls. The specific x/y/w/h values must still appear.
+    expect(mockDoc.rect).toHaveBeenCalledTimes(6);
     expect(mockDoc.rect).toHaveBeenCalledWith(0, 0, 400, 600);
     expect(mockDoc.rect).toHaveBeenCalledWith(40, 60, 160, 240);
     expect(mockDoc.rect).toHaveBeenCalledWith(200, 300, 160, 240);
+    // And every node should have been clipped exactly once.
+    expect(mockDoc.clip).toHaveBeenCalledTimes(3);
+    expect(mockDoc.save).toHaveBeenCalledTimes(3);
+    expect(mockDoc.restore).toHaveBeenCalledTimes(3);
+  });
+
+  it("should clip every node to its bounds (own drawing + descendants)", () => {
+    // Verifies the core invariant: nothing a node or its descendants draw can
+    // appear outside the node's bounds. Achieved by save() → rect().clip() →
+    // … → restore() around the body.
+    const callOrder: string[] = [];
+    const mockDoc = {
+      stroke: vi.fn().mockReturnThis(),
+      lineWidth: vi.fn().mockReturnThis(),
+      rect: vi.fn(function (this: PDFKit.PDFDocument) {
+        callOrder.push("rect");
+        return this;
+      }),
+      clip: vi.fn(function (this: PDFKit.PDFDocument) {
+        callOrder.push("clip");
+        return this;
+      }),
+      save: vi.fn(function (this: PDFKit.PDFDocument) {
+        callOrder.push("save");
+        return this;
+      }),
+      restore: vi.fn(function (this: PDFKit.PDFDocument) {
+        callOrder.push("restore");
+        return this;
+      }),
+    } as unknown as PDFKit.PDFDocument;
+
+    const parent = new RealBox({
+      x: 0,
+      y: 0,
+      width: 100,
+      height: 100,
+      borderWidth: 0,
+      measure: "absolute",
+    });
+    const child = new RealBox({
+      x: 0,
+      y: 0,
+      width: 200, // intentionally larger than parent — must still get clipped
+      height: 200,
+      borderWidth: 0,
+      measure: "absolute",
+    });
+    parent.addChild(child);
+
+    draw(mockDoc, parent);
+
+    // Parent: save → rect+clip → recurse(child: save → rect+clip → restore) → restore
+    expect(callOrder).toEqual([
+      "save",
+      "rect",
+      "clip",
+      "save",
+      "rect",
+      "clip",
+      "restore",
+      "restore",
+    ]);
   });
 });
 

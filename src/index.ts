@@ -216,6 +216,19 @@ export const layout = (doc: PDFKit.PDFDocument, node: ValidShape) => {
 
   const size = node.getBounds(doc.page);
 
+  // Semantics: a node's content (its own drawing + every descendant's
+  // drawing) NEVER extends beyond the node's bounds. We enforce this with a
+  // clipping region around the node's body. Notable consequences:
+  //   - `Image({ fit: 'cover' })` actually covers without spilling: pdfkit's
+  //     `cover` mode draws an over-large image; the clip trims it.
+  //   - Children with `measure: 'absolute'` placed outside their parent get
+  //     clipped at the parent boundary instead of leaking out.
+  // The border is drawn AFTER the clip is released so a strokeWidth=N stroke
+  // renders at full width centred on the box edge instead of being clipped
+  // to half-width.
+  doc.save();
+  doc.rect(size.x, size.y, size.width, size.height).clip();
+
   if (isImage(node)) {
     doc.image(node.src, size.x, size.y, {
       [node.fit === "contain" ? "fit" : "cover"]: [size.width, size.height],
@@ -230,12 +243,23 @@ export const layout = (doc: PDFKit.PDFDocument, node: ValidShape) => {
 
   if (isText(node)) {
     const xPos = size.x + node.padding;
-    const yPos =
-      node.verticalAlign === "top"
-        ? size.y + node.padding
-        : node.verticalAlign === "middle"
-          ? size.y + size.height / 2
-          : size.y + size.height - node.padding;
+    const fontSize = node.fontSize || 12;
+    doc.fontSize(fontSize).fillColor(node.color);
+
+    // Position text using FONT METRICS, not pdfkit's heightOfString. The line
+    // box reserves space for descenders below the baseline (~20% of font size
+    // for typical Latin fonts) which is empty for cap-only text. Centering
+    // the line box therefore makes the visible glyphs appear above centre.
+    // We compute positions for the *visible* glyph bbox instead:
+    //   - cap top    = baseline - capHeight
+    //   - baseline   = where letters sit
+    //   - cap bottom = baseline (for caps; descenders extend below)
+    // pdfkit's `doc.text(text, x, y, …)` interprets `y` as the top of the
+    // line box, where: line_top = baseline - ascender. So once we know the
+    // desired baseline, line_top = baseline - ascender.
+    //
+    // Multi-line text: heightOfString tells us the full multi-line line-box
+    // height; we use that for top-of-first-line vs centre-of-block reasoning.
     const textOptions = {
       height: size.height - node.padding * 2,
       width: size.width - node.padding * 2,
@@ -243,16 +267,54 @@ export const layout = (doc: PDFKit.PDFDocument, node: ValidShape) => {
       lineGap: 0,
       paragraphGap: 0,
     };
-    doc.fontSize(node.fontSize || 12).fillColor(node.color);
-    const height = doc.heightOfString(node.text, textOptions);
-    const adjustment =
-      node.verticalAlign === "bottom"
-        ? height
-        : node.verticalAlign === "middle"
-          ? height / 2
-          : 0;
-    doc.text(node.text, xPos, yPos - adjustment, textOptions);
+    // biome-ignore lint/suspicious/noExplicitAny: _font is private but is the
+    // only way to read font metrics in pdfkit.
+    const font = (doc as any)._font;
+    const ascender = ((font?.ascender ?? 800) * fontSize) / 1000;
+    // capHeight is missing on some font subtypes; fall back to a reasonable
+    // ratio of ascender. The fallback errs toward the line-box value, which
+    // is the previous behaviour.
+    const capHeight =
+      font?.capHeight != null
+        ? (font.capHeight * fontSize) / 1000
+        : ascender * 0.72;
+
+    // Compute the *visible* (cap-bbox) height of the rendered block.
+    //   blockHeight = numLines * lineHeightWithGap (what pdfkit reserves)
+    //   visibleBlockHeight =
+    //     (numLines - 1) * lineHeightWithGap + capHeight
+    //     = blockHeight - (lineHeightWithGap - capHeight)
+    // i.e. peel one line's "non-glyph reservation" (descender room + lineGap)
+    // off the bottom, since the last line ends at its baseline visually.
+    const blockHeight = doc.heightOfString(node.text, textOptions);
+    const lineHeightWithGap = doc.currentLineHeight(true);
+    const lineExtra = Math.max(0, lineHeightWithGap - capHeight);
+    const visibleBlockHeight = Math.max(capHeight, blockHeight - lineExtra);
+
+    // From the desired *visible* top, pdfkit's text-y (= line-box top of
+    // the first line) sits ABOVE it by (ascender - capHeight).
+    const offsetForLineBoxTop = ascender - capHeight;
+
+    let lineTop: number;
+    if (node.verticalAlign === "top") {
+      const visibleTop = size.y + node.padding;
+      lineTop = visibleTop - offsetForLineBoxTop;
+    } else if (node.verticalAlign === "middle") {
+      const boxCentre = size.y + size.height / 2;
+      const visibleTop = boxCentre - visibleBlockHeight / 2;
+      lineTop = visibleTop - offsetForLineBoxTop;
+    } else {
+      // bottom: visible bottom (baseline of last line for caps) sits at
+      // box bottom minus padding.
+      const visibleBottom = size.y + size.height - node.padding;
+      const visibleTop = visibleBottom - visibleBlockHeight;
+      lineTop = visibleTop - offsetForLineBoxTop;
+    }
+
+    doc.text(node.text, xPos, lineTop, textOptions);
   }
+
+  doc.restore();
 
   if (node.borderWidth > 0) {
     doc
