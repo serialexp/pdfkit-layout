@@ -8,9 +8,5 @@
     "declaration": true
   },
   "include": ["src"],
-<<<<<<< Updated upstream
   "exclude": ["**/*.test.ts", "**/*.spec.ts", "node_modules", "example.ts"]
-=======
-  "exclude": ["**/*.test.ts", "**/*.spec.ts"]
->>>>>>> Stashed changes
 }
